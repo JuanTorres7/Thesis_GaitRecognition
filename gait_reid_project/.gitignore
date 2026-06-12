@@ -1,0 +1,19 @@
+# Entorno virtual
+venv/
+.venv/
+
+# Modelos entrenados (archivos binarios grandes)
+models/*.pth
+guardados/
+*.pth
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Checkpoints de Jupyter Notebook
+.ipynb_checkpoints/
+
+# Archivos del sistema operativo (opcional pero recomendado)
+.DS_Store
+Thumbs.db

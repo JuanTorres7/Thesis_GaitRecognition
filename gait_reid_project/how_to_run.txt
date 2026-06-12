@@ -1,0 +1,10 @@
+python -m venv venv
+source venv/bin/activate || venv\Scripts\activate.bat
+pip install -r requirements.txt
+
+python train_ssl.py
+python train_supervised.py
+python train_hybrid.py
+
+# Ejecutar estudio de ablación completo (Experimentos A, B, C, D)
+python run_ablation.py

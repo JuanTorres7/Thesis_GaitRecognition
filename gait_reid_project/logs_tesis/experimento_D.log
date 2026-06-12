@@ -1,0 +1,166 @@
+Device: cuda
+GPU: NVIDIA GeForce RTX 3060 Ti
+Dataset Root: C:/output
+
+============================================================
+ INICIANDO EVALUACIÓN EXHAUSTIVA CASIA-B - FASE: HYBRID
+============================================================
+[OK] Modelo Hibrido cargado desde: models/hybrid_model_final_Circle.pth
+
+[+] Preparando Dataset de Prueba (Open-Set Retrieval: 50 Sujetos No Vistos)
+
+[Dataset Supervised Volumétrico] Rango: 075-124 (50 sujetos)
+Ángulos: ['000', '018', '036', '054', '072', '090', '108', '126', '144', '162', '180']
+  Secuencias Totales de P(Id) disponibles: 5461, Clases Aprobadas: 50
+[*] Iniciando Extracción de Vectores Biométicos...
+  Procesando Batch 10/171...
+  Procesando Batch 20/171...
+  Procesando Batch 30/171...
+  Procesando Batch 40/171...
+  Procesando Batch 50/171...
+  Procesando Batch 60/171...
+  Procesando Batch 70/171...
+  Procesando Batch 80/171...
+  Procesando Batch 90/171...
+  Procesando Batch 100/171...
+  Procesando Batch 110/171...
+  Procesando Batch 120/171...
+  Procesando Batch 130/171...
+  Procesando Batch 140/171...
+  Procesando Batch 150/171...
+  Procesando Batch 160/171...
+  Procesando Batch 170/171...
+[OK] Extracción completada en 75.1s. Total Muestras: 5461
+
+[*] Fragmentando Espacio Latente en Gallery / Queries...
+  Total Gallery: 2166 muestras.
+
+================================================================================
+ MATRIZ DE DEGRADACION ANGULAR (RANK-1 %)
+================================================================================
+
+--- Prueba: NM (Normal Walking) (1100 Probes) ---
+> Promedio Condición | Rank-1: 99.4% | Rank-5: 99.8% | Rank-10: 99.8% | mAP: 75.0%
+000°: 98.0% | 018°: 100.0% | 036°: 98.0% | 054°: 99.0% | 072°: 100.0% | 090°: 100.0% | 108°: 97.0% | 126°: 99.0% | 144°: 99.0% | 162°: 99.0% | 180°: 95.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 120, nm-06, Ángulo 108 | Precisión lograda: 9.9%
+   -> Probe: Sujeto 094, nm-06, Ángulo 000 | Precisión lograda: 10.3%
+   -> Probe: Sujeto 095, nm-05, Ángulo 180 | Precisión lograda: 11.2%
+   -> Probe: Sujeto 095, nm-05, Ángulo 036 | Precisión lograda: 13.5%
+   -> Probe: Sujeto 093, nm-06, Ángulo 090 | Precisión lograda: 14.0%
+
+--- Prueba: BG (Bag Oclusion) (1095 Probes) ---
+> Promedio Condición | Rank-1: 75.9% | Rank-5: 83.8% | Rank-10: 87.9% | mAP: 55.8%
+000°: 77.0% | 018°: 74.7% | 036°: 77.8% | 054°: 81.6% | 072°: 63.0% | 090°: 59.0% | 108°: 64.0% | 126°: 69.0% | 144°: 78.0% | 162°: 76.8% | 180°: 72.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 111, bg-01, Ángulo 090 | Precisión lograda: 1.3%
+   -> Probe: Sujeto 111, bg-02, Ángulo 090 | Precisión lograda: 1.5%
+   -> Probe: Sujeto 098, bg-01, Ángulo 000 | Precisión lograda: 1.6%
+   -> Probe: Sujeto 109, bg-02, Ángulo 180 | Precisión lograda: 1.7%
+   -> Probe: Sujeto 113, bg-02, Ángulo 090 | Precisión lograda: 1.8%
+
+--- Prueba: CL (Coat Appearance) (1100 Probes) ---
+> Promedio Condición | Rank-1: 49.7% | Rank-5: 59.4% | Rank-10: 66.2% | mAP: 37.5%
+000°: 31.0% | 018°: 40.0% | 036°: 44.0% | 054°: 57.0% | 072°: 61.0% | 090°: 53.0% | 108°: 51.0% | 126°: 51.0% | 144°: 48.0% | 162°: 34.0% | 180°: 33.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 109, cl-01, Ángulo 180 | Precisión lograda: 0.9%
+   -> Probe: Sujeto 078, cl-02, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 078, cl-01, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 109, cl-01, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 112, cl-01, Ángulo 090 | Precisión lograda: 1.2%
+
+============================================================
+ VEREDICTO FINAL DE TOPOLOGIA VOLUMETRICA
+============================================================
+Baseline Temporal (Antiguo): mAP 29.23%
+Modelo Volumétrico Actual:   mAP 56.12%
+
+[OK] CRECIMIENTO ESTADISTICO CONFIRMADO.
+La transición a Tensión Temporal [T, C, H, W] y Dual Pooling superó exitosamente
+las deficiencias del ResNet-18 estático. La tesis es matemáticamente sólida.
+Device: cuda
+GPU: NVIDIA GeForce RTX 3060 Ti
+Dataset Root: C:/output
+
+============================================================
+ INICIANDO EVALUACIÓN EXHAUSTIVA CASIA-B - FASE: HYBRID
+============================================================
+[OK] Modelo Hibrido cargado desde: models/hybrid_model_final_Circle.pth
+
+[+] Preparando Dataset de Prueba (Open-Set Retrieval: 50 Sujetos No Vistos)
+
+[Dataset Supervised Volumétrico] Rango: 075-124 (50 sujetos)
+Ángulos: ['000', '018', '036', '054', '072', '090', '108', '126', '144', '162', '180']
+  Secuencias Totales de P(Id) disponibles: 5461, Clases Aprobadas: 50
+[*] Iniciando Extracción de Vectores Biométicos...
+  Procesando Batch 10/171...
+  Procesando Batch 20/171...
+  Procesando Batch 30/171...
+  Procesando Batch 40/171...
+  Procesando Batch 50/171...
+  Procesando Batch 60/171...
+  Procesando Batch 70/171...
+  Procesando Batch 80/171...
+  Procesando Batch 90/171...
+  Procesando Batch 100/171...
+  Procesando Batch 110/171...
+  Procesando Batch 120/171...
+  Procesando Batch 130/171...
+  Procesando Batch 140/171...
+  Procesando Batch 150/171...
+  Procesando Batch 160/171...
+  Procesando Batch 170/171...
+[OK] Extracción completada en 75.6s. Total Muestras: 5461
+
+[*] Fragmentando Espacio Latente en Gallery / Queries...
+  Total Gallery: 2166 muestras.
+
+================================================================================
+ MATRIZ DE DEGRADACION ANGULAR (RANK-1 %)
+================================================================================
+
+--- Prueba: NM (Normal Walking) (1100 Probes) ---
+> Promedio Condición | Rank-1: 99.4% | Rank-5: 99.8% | Rank-10: 99.8% | mAP: 75.0%
+000°: 98.0% | 018°: 100.0% | 036°: 98.0% | 054°: 99.0% | 072°: 100.0% | 090°: 100.0% | 108°: 97.0% | 126°: 99.0% | 144°: 99.0% | 162°: 99.0% | 180°: 95.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 120, nm-06, Ángulo 108 | Precisión lograda: 9.9%
+   -> Probe: Sujeto 094, nm-06, Ángulo 000 | Precisión lograda: 10.3%
+   -> Probe: Sujeto 095, nm-05, Ángulo 180 | Precisión lograda: 11.2%
+   -> Probe: Sujeto 095, nm-05, Ángulo 036 | Precisión lograda: 13.5%
+   -> Probe: Sujeto 093, nm-06, Ángulo 090 | Precisión lograda: 14.0%
+
+--- Prueba: BG (Bag Oclusion) (1095 Probes) ---
+> Promedio Condición | Rank-1: 75.9% | Rank-5: 83.8% | Rank-10: 87.9% | mAP: 55.8%
+000°: 77.0% | 018°: 74.7% | 036°: 77.8% | 054°: 81.6% | 072°: 63.0% | 090°: 59.0% | 108°: 64.0% | 126°: 69.0% | 144°: 78.0% | 162°: 76.8% | 180°: 72.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 111, bg-01, Ángulo 090 | Precisión lograda: 1.3%
+   -> Probe: Sujeto 111, bg-02, Ángulo 090 | Precisión lograda: 1.5%
+   -> Probe: Sujeto 098, bg-01, Ángulo 000 | Precisión lograda: 1.6%
+   -> Probe: Sujeto 109, bg-02, Ángulo 180 | Precisión lograda: 1.7%
+   -> Probe: Sujeto 113, bg-02, Ángulo 090 | Precisión lograda: 1.8%
+
+--- Prueba: CL (Coat Appearance) (1100 Probes) ---
+> Promedio Condición | Rank-1: 49.7% | Rank-5: 59.4% | Rank-10: 66.2% | mAP: 37.5%
+000°: 31.0% | 018°: 40.0% | 036°: 44.0% | 054°: 57.0% | 072°: 61.0% | 090°: 53.0% | 108°: 51.0% | 126°: 51.0% | 144°: 48.0% | 162°: 34.0% | 180°: 33.0%
+
+  [Análisis de Fallos Clínicos - Las 5 peores inferencias MinP]
+   -> Probe: Sujeto 109, cl-01, Ángulo 180 | Precisión lograda: 0.9%
+   -> Probe: Sujeto 078, cl-02, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 078, cl-01, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 109, cl-01, Ángulo 000 | Precisión lograda: 1.1%
+   -> Probe: Sujeto 112, cl-01, Ángulo 090 | Precisión lograda: 1.2%
+
+============================================================
+ VEREDICTO FINAL DE TOPOLOGIA VOLUMETRICA
+============================================================
+Baseline Temporal (Antiguo): mAP 29.23%
+Modelo Volumétrico Actual:   mAP 56.12%
+
+[OK] CRECIMIENTO ESTADISTICO CONFIRMADO.
+La transición a Tensión Temporal [T, C, H, W] y Dual Pooling superó exitosamente
+las deficiencias del ResNet-18 estático. La tesis es matemáticamente sólida.

@@ -1,0 +1,5 @@
+Experimento,Perdida,ReRanking,Rank1,mAP
+Experimento A,Triplet,No,73.67%,48.74%
+Experimento B,Triplet,Si,76.67%,56.94%
+Experimento C,Circle,No,73.10%,48.89%
+Experimento D,Circle,Si,75.00%,56.12%
