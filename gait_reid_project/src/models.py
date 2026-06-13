@@ -4,10 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-# Número de franjas HPP — cambia este valor para escalar
+# Número de franjas HPP — ahora es un parámetro de cada modelo (hpp_parts),
+# NO una constante global. Esto permite usar valores distintos por dataset
+# (p.ej. CASIA-B=2, Gait3D=4) sin afectar al otro.
 # 2 franjas → [upper, lower]   hpp_project input = 512*2*2 = 2048
 # 4 franjas → resolución 2×    hpp_project input = 512*4*2 = 4096
-HPP_PARTS = 2
 
 class TemporalPooling(nn.Module):
     """
@@ -27,10 +28,12 @@ class TemporalPooling(nn.Module):
 class GaitBackbone(nn.Module):
     """
     Backbone ResNet-18 modificado para volumetría temporal [B, T, C, H, W].
-    HPP_PARTS franjas horizontales + Dual Pooling temporal (GAP+GMP).
+    self.hpp_parts franjas horizontales + Dual Pooling temporal (GAP+GMP).
     """
-    def __init__(self, embed_dim=256):
+    def __init__(self, embed_dim=256, hpp_parts=2):
         super().__init__()
+
+        self.hpp_parts = hpp_parts
 
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
@@ -47,12 +50,12 @@ class GaitBackbone(nn.Module):
         self.layer3  = resnet.layer3
         self.layer4  = resnet.layer4
 
-        # HPP: divide la altura en HPP_PARTS franjas horizontales
-        # Con HPP_PARTS=4: [B*T, 512, 4, 1] → 4 franjas independientes
-        self.avgpool = nn.AdaptiveAvgPool2d((HPP_PARTS, 1))
+        # HPP: divide la altura en self.hpp_parts franjas horizontales
+        # Con hpp_parts=4: [B*T, 512, 4, 1] → 4 franjas independientes
+        self.avgpool = nn.AdaptiveAvgPool2d((self.hpp_parts, 1))
 
-        # Proyección HPP: 512 canales × HPP_PARTS franjas × 2 (GAP+GMP) → 1024
-        hpp_input_dim = 512 * HPP_PARTS * 2   # 4096 con HPP_PARTS=4
+        # Proyección HPP: 512 canales × hpp_parts franjas × 2 (GAP+GMP) → 1024
+        hpp_input_dim = 512 * self.hpp_parts * 2   # 4096 con hpp_parts=4
         self.hpp_project = nn.Linear(hpp_input_dim, 1024)
         nn.init.normal_(self.hpp_project.weight.data, 0.0, 0.01)
         nn.init.constant_(self.hpp_project.bias.data, 0.0)
@@ -68,7 +71,7 @@ class GaitBackbone(nn.Module):
         )
 
     def spatial_forward(self, x_fp):
-        """Extracción espacial 2D con HPP. Retorna [B*T, 512, HPP_PARTS]."""
+        """Extracción espacial 2D con HPP. Retorna [B*T, 512, self.hpp_parts]."""
         x = self.conv1(x_fp)
         x = self.bn1(x)
         x = self.relu(x)
@@ -77,8 +80,8 @@ class GaitBackbone(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.avgpool(x)                           # [B*T, 512, HPP_PARTS, 1]
-        x = x.view(x.size(0), 512, HPP_PARTS)        # [B*T, 512, HPP_PARTS]
+        x = self.avgpool(x)                           # [B*T, 512, hpp_parts, 1]
+        x = x.view(x.size(0), 512, self.hpp_parts)   # [B*T, 512, hpp_parts]
         return x
 
     def forward(self, x):
@@ -89,19 +92,19 @@ class GaitBackbone(nn.Module):
         x_fold      = x.view(B * T, C, H, W)
 
         # 2. Extracción espacial con HPP
-        features_2d = self.spatial_forward(x_fold)    # [B*T, 512, HPP_PARTS]
+        features_2d = self.spatial_forward(x_fold)    # [B*T, 512, hpp_parts]
 
         # 3. Restaurar dimensión temporal
-        features_3d = features_2d.view(B, T, 512, HPP_PARTS)  # [B, T, 512, HPP_PARTS]
+        features_3d = features_2d.view(B, T, 512, self.hpp_parts)  # [B, T, 512, hpp_parts]
 
         # 4. Pooling temporal dual (GAP+GMP) por cada franja HPP
         franja_features = []
-        for p in range(HPP_PARTS):
+        for p in range(self.hpp_parts):
             z_p = self.temporal_pool(features_3d[:, :, :, p])  # [B, 1024]
             franja_features.append(z_p)
 
         # 5. Concatenar todas las franjas
-        z_hpp = torch.cat(franja_features, dim=1)     # [B, 1024 * HPP_PARTS]
+        z_hpp = torch.cat(franja_features, dim=1)     # [B, 1024 * hpp_parts]
 
         # 6. Reducir a 1024 dimensiones
         temporal_embedding = self.hpp_project(z_hpp)  # [B, 1024]
@@ -117,10 +120,12 @@ class SupervisedReIDModel(nn.Module):
     def __init__(self, backbone, num_classes, freeze_backbone=False):
         super().__init__()
 
+        self.hpp_parts = backbone.hpp_parts
+
         self.spatial_encoder = nn.Sequential(
             backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool,
             backbone.layer1, backbone.layer2, backbone.layer3, backbone.layer4,
-            backbone.avgpool  # AdaptiveAvgPool2d((HPP_PARTS, 1))
+            backbone.avgpool  # AdaptiveAvgPool2d((hpp_parts, 1))
         )
         self.temporal_pool = backbone.temporal_pool
         self.hpp_project   = backbone.hpp_project
@@ -146,17 +151,17 @@ class SupervisedReIDModel(nn.Module):
         B, T, C, H, W = x.size()
 
         x_fold          = x.view(B * T, C, H, W)
-        spatial_features = self.spatial_encoder(x_fold)          # [B*T, 512, HPP_PARTS, 1]
-        spatial_features = spatial_features.view(B * T, 512, HPP_PARTS)
+        spatial_features = self.spatial_encoder(x_fold)          # [B*T, 512, hpp_parts, 1]
+        spatial_features = spatial_features.view(B * T, 512, self.hpp_parts)
 
-        temporal_features = spatial_features.view(B, T, 512, HPP_PARTS)
+        temporal_features = spatial_features.view(B, T, 512, self.hpp_parts)
 
         franja_features = []
-        for p in range(HPP_PARTS):
+        for p in range(self.hpp_parts):
             z_p = self.temporal_pool(temporal_features[:, :, :, p])
             franja_features.append(z_p)
 
-        z_hpp           = torch.cat(franja_features, dim=1)       # [B, 1024*HPP_PARTS]
+        z_hpp           = torch.cat(franja_features, dim=1)       # [B, 1024*hpp_parts]
         pooled_features = self.hpp_project(z_hpp)                 # [B, 1024]
         return pooled_features
 
@@ -182,6 +187,7 @@ class HybridGaitModel(nn.Module):
     """
     def __init__(self, supervised_model: SupervisedReIDModel):
         super().__init__()
+        self.hpp_parts       = supervised_model.hpp_parts
         self.spatial_encoder = supervised_model.spatial_encoder
         self.temporal_pool   = supervised_model.temporal_pool
         self.hpp_project     = supervised_model.hpp_project
@@ -192,17 +198,17 @@ class HybridGaitModel(nn.Module):
         B, T, C, H, W = x.size()
 
         x_fold           = x.view(B * T, C, H, W)
-        spatial_features = self.spatial_encoder(x_fold)           # [B*T, 512, HPP_PARTS, 1]
-        spatial_features = spatial_features.view(B * T, 512, HPP_PARTS)
+        spatial_features = self.spatial_encoder(x_fold)           # [B*T, 512, hpp_parts, 1]
+        spatial_features = spatial_features.view(B * T, 512, self.hpp_parts)
 
-        temporal_features = spatial_features.view(B, T, 512, HPP_PARTS)
+        temporal_features = spatial_features.view(B, T, 512, self.hpp_parts)
 
         franja_features = []
-        for p in range(HPP_PARTS):
+        for p in range(self.hpp_parts):
             z_p = self.temporal_pool(temporal_features[:, :, :, p])
             franja_features.append(z_p)
 
-        z_hpp           = torch.cat(franja_features, dim=1)        # [B, 1024*HPP_PARTS]
+        z_hpp           = torch.cat(franja_features, dim=1)        # [B, 1024*hpp_parts]
         pooled_features = self.hpp_project(z_hpp)                  # [B, 1024]
         return pooled_features
 

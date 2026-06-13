@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import argparse
 
 from configs import settings
-from src.data import CASIAB_Supervised
+from src.data import get_supervised_dataset, Gait3D_Test
 from src.models import HybridGaitModel, SupervisedReIDModel, GaitBackbone
 from utils_reranking import re_ranking
 
@@ -17,100 +17,58 @@ from utils_reranking import re_ranking
 # =======================================================
 
 def extract_features_with_info(data_loader, model, device, phase='hybrid'):
-    """Extracción estándar — un embedding por secuencia (corte central)."""
+    """Extracción estándar — un embedding por secuencia."""
     model.eval()
-    all_embeddings, all_labels = [], []
-    all_conditions, all_angles, all_subjects = [], [], []
-
+    all_emb, all_lbl, all_cond, all_ang, all_sub = [], [], [], [], []
     print("[*] Extracción estándar...")
-    start_time = time.time()
-
+    t0 = time.time()
     with torch.no_grad():
-        for batch_idx, data in enumerate(data_loader):
-            images, labels, conds, angs, subs = data
-            images = images.to(device)
-            if phase == 'ssl':
-                emb = model(images)
-            else:
-                _, emb = model(images)
-            all_embeddings.append(emb.cpu())
-            all_labels.extend(labels.tolist())
-            all_conditions.extend(conds)
-            all_angles.extend(angs)
-            all_subjects.extend(subs)
-            if (batch_idx + 1) % 10 == 0:
-                print(f"  Batch {batch_idx+1}/{len(data_loader)}...")
-
-    embeddings = torch.cat(all_embeddings, dim=0)
-    print(f"[OK] Extracción completada en {time.time()-start_time:.1f}s. "
-          f"Muestras: {len(all_labels)}")
-    return (embeddings, np.array(all_labels), np.array(all_conditions),
-            np.array(all_angles), np.array(all_subjects))
+        for b, data in enumerate(data_loader):
+            imgs, lbls, conds, angs, subs = data
+            imgs = imgs.to(device)
+            emb  = model(imgs)[1] if phase != 'ssl' else model(imgs)
+            all_emb.append(emb.cpu())
+            all_lbl.extend(lbls.tolist())
+            all_cond.extend(conds); all_ang.extend(angs); all_sub.extend(subs)
+            if (b+1) % 10 == 0:
+                print(f"  Batch {b+1}/{len(data_loader)}...")
+    emb = torch.cat(all_emb, dim=0)
+    print(f"[OK] {len(all_lbl)} muestras en {time.time()-t0:.1f}s")
+    return emb, np.array(all_lbl), np.array(all_cond), np.array(all_ang), np.array(all_sub)
 
 
-def extract_features_tta(dataset, model, device, phase='hybrid',
-                         n_augments=4, batch_size=32):
-    """
-    Test Time Augmentation: N cortes temporales aleatorios por secuencia, promediados.
-
-    Por qué funciona: cada corte captura una fase distinta del ciclo de marcha.
-    El promedio cancela variaciones de pose transitoria y produce una representación
-    más completa y estable del patrón de marcha del sujeto.
-
-    Resultado empírico en CASIA-B HPP×2 + PAL + RR:
-      Sin TTA → mAP 61.8%
-      Con TTA×4 → mAP 69.5%  (+7.7 puntos)
-    """
+def extract_features_tta(dataset, model, device, phase='hybrid', n_augments=4, batch_size=32):
+    """TTA: N cortes temporales por secuencia, promediados y renormalizados."""
     model.eval()
-    print(f"[*] Extracción con TTA×{n_augments}...")
-    start_time = time.time()
-
-    dataset.augment = True  # cortes aleatorios en cada pasada
+    print(f"[*] TTA×{n_augments}...")
+    t0 = time.time()
+    dataset.augment = True
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                         num_workers=2, pin_memory=True)
-
-    accum       = None
-    all_labels  = None
-    all_conds   = None
-    all_angles  = None
-    all_subjects = None
-
-    for aug_idx in range(n_augments):
-        print(f"  Pasada {aug_idx+1}/{n_augments}...")
-        pass_embeds = []
-        pass_labels, pass_conds, pass_angles, pass_subs = [], [], [], []
-
+    accum = None
+    meta  = None
+    for i in range(n_augments):
+        print(f"  Pasada {i+1}/{n_augments}...")
+        pass_emb, pass_lbl, pass_cond, pass_ang, pass_sub = [], [], [], [], []
         with torch.no_grad():
             for data in loader:
-                images, labels, conds, angs, subs = data
-                images = images.to(device)
-                if phase == 'ssl':
-                    emb = model(images)
-                else:
-                    _, emb = model(images)
-                pass_embeds.append(emb.cpu())
-                pass_labels.extend(labels.tolist())
-                pass_conds.extend(conds)
-                pass_angles.extend(angs)
-                pass_subs.extend(subs)
-
-        pass_embeds = torch.cat(pass_embeds, dim=0)
+                imgs, lbls, conds, angs, subs = data
+                imgs = imgs.to(device)
+                emb  = model(imgs)[1] if phase != 'ssl' else model(imgs)
+                pass_emb.append(emb.cpu())
+                pass_lbl.extend(lbls.tolist())
+                pass_cond.extend(conds); pass_ang.extend(angs); pass_sub.extend(subs)
+        pass_emb = torch.cat(pass_emb, dim=0)
         if accum is None:
-            accum        = pass_embeds
-            all_labels   = np.array(pass_labels)
-            all_conds    = np.array(pass_conds)
-            all_angles   = np.array(pass_angles)
-            all_subjects = np.array(pass_subs)
+            accum = pass_emb
+            meta  = (np.array(pass_lbl), np.array(pass_cond),
+                     np.array(pass_ang), np.array(pass_sub))
         else:
-            accum += pass_embeds
-
-    # Promediar y renormalizar L2
-    accum = accum / n_augments
-    accum = torch.nn.functional.normalize(accum, p=2, dim=1)
+            accum += pass_emb
+    accum = torch.nn.functional.normalize(accum / n_augments, p=2, dim=1)
     dataset.augment = False
-
-    print(f"[OK] TTA completada en {time.time()-start_time:.1f}s.")
-    return accum, all_labels, all_conds, all_angles, all_subjects
+    print(f"[OK] TTA completada en {time.time()-t0:.1f}s")
+    return accum, meta[0], meta[1], meta[2], meta[3]
 
 
 # =======================================================
@@ -118,38 +76,23 @@ def extract_features_tta(dataset, model, device, phase='hybrid',
 # =======================================================
 
 def compute_reid_metrics_block(dist_matrix, query_labels, gallery_labels):
-    """Calcula Rank-1/5/10 y mAP. Devuelve AP por muestra para análisis de fallos."""
-    if torch.is_tensor(dist_matrix):
-        dist_matrix = dist_matrix.cpu().numpy()
-
-    CMC_top1, CMC_top5, CMC_top10, AP_list, sample_ap = [], [], [], [], []
-
+    if torch.is_tensor(dist_matrix): dist_matrix = dist_matrix.cpu().numpy()
+    top1, top5, top10, aps, sample_ap = [], [], [], [], []
     for i in range(len(query_labels)):
-        sorted_idx    = np.argsort(dist_matrix[i, :])
-        sorted_labels = gallery_labels[sorted_idx]
-        matches       = (sorted_labels == query_labels[i]).astype(np.int32)
-
-        CMC_top1.append(matches[0])
-        CMC_top5.append(1 if matches[:5].sum()  > 0 else 0)
-        CMC_top10.append(1 if matches[:10].sum() > 0 else 0)
-
-        num_tp = matches.sum()
-        if num_tp == 0:
-            AP_list.append(0.0); sample_ap.append(0.0); continue
-
-        hits, prec_sum = 0, 0.0
-        for j, m in enumerate(matches):
-            if m:
-                hits      += 1
-                prec_sum  += hits / (j + 1)
-        AP = prec_sum / num_tp
-        AP_list.append(AP); sample_ap.append(AP)
-
-    return (np.mean(CMC_top1)  * 100,
-            np.mean(CMC_top5)  * 100,
-            np.mean(CMC_top10) * 100,
-            np.mean(AP_list)   * 100,
-            np.array(sample_ap))
+        si  = np.argsort(dist_matrix[i])
+        m   = (gallery_labels[si] == query_labels[i]).astype(np.int32)
+        top1.append(m[0])
+        top5.append(1 if m[:5].sum() > 0 else 0)
+        top10.append(1 if m[:10].sum() > 0 else 0)
+        ntp = m.sum()
+        if ntp == 0:
+            aps.append(0.); sample_ap.append(0.); continue
+        hits, sp = 0, 0.
+        for j, v in enumerate(m):
+            if v: hits += 1; sp += hits/(j+1)
+        ap = sp/ntp; aps.append(ap); sample_ap.append(ap)
+    return (np.mean(top1)*100, np.mean(top5)*100, np.mean(top10)*100,
+            np.mean(aps)*100, np.array(sample_ap))
 
 
 # =======================================================
@@ -158,176 +101,198 @@ def compute_reid_metrics_block(dist_matrix, query_labels, gallery_labels):
 
 def _load_model(config, phase, model_path):
     if not os.path.exists(model_path):
-        print(f"[X] No se encontró: {model_path}")
-        return None
-    checkpoint = torch.load(model_path, map_location=config.DEVICE, weights_only=False)
+        print(f"[X] No encontrado: {model_path}"); return None
+    ckpt = torch.load(model_path, map_location=config.DEVICE, weights_only=False)
     if phase == 'ssl':
-        model = GaitBackbone()
-        model.load_state_dict(checkpoint['model_state_dict'])
+        m = GaitBackbone(); m.load_state_dict(ckpt['model_state_dict'])
     else:
-        dummy_backbone   = GaitBackbone()
-        dummy_supervised = SupervisedReIDModel(
-            backbone=dummy_backbone,
-            num_classes=checkpoint.get('num_classes', 74)
-        )
+        dummy = SupervisedReIDModel(GaitBackbone(),
+                                    num_classes=ckpt.get('num_classes', 74))
         if phase == 'supervised':
-            dummy_supervised.load_state_dict(checkpoint['model_state_dict'])
-            model = HybridGaitModel(dummy_supervised)
+            dummy.load_state_dict(ckpt['model_state_dict'])
+            m = HybridGaitModel(dummy)
         else:
-            model = HybridGaitModel(dummy_supervised)
-            model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(config.DEVICE)
-    print(f"[OK] Modelo cargado: {model_path}")
-    return model
+            m = HybridGaitModel(dummy)
+            m.load_state_dict(ckpt['model_state_dict'])
+    print(f"[OK] Modelo: {model_path}")
+    return m.to(config.DEVICE)
 
 
 # =======================================================
-# 4. EVALUACIÓN PRINCIPAL
+# 4. EVALUACIÓN PRINCIPAL — CASIA-B
 # =======================================================
 
-def test_reid_exhaustive(config, phase='hybrid', model_path=None, use_tta=True, n_tta=4):
-    """
-    Evaluación exhaustiva CASIA-B con matriz angular completa.
-
-    Configuración final validada:
-      HPP×2 + PAL (60 épocas) + Re-ranking (K1=40, K2=2, λ=0.05) + TTA×4
-      → mAP global: 69.5% (+40.3% sobre baseline 29.23%)
-
-    Args:
-        use_tta: Si True (default), usa TTA×n_tta. Resultado más alto.
-                 Si False, usa extracción estándar (más rápido, para debug).
-        n_tta:   Número de cortes TTA (default 4, validado empíricamente).
-    """
-    print("\n" + "="*60)
-    print(f" EVALUACIÓN EXHAUSTIVA CASIA-B — FASE: {phase.upper()}")
-    print(f" Modo: {'TTA×' + str(n_tta) if use_tta else 'Estándar'} | "
-          f"Re-ranking: {'K1=' + str(config.RERANK_K1) if config.USE_RERANKING else 'OFF'}")
-    if model_path:
-        print(f" Checkpoint: {os.path.basename(model_path)}")
-    print("="*60)
-
-    if model_path is None:
-        model_path = {
-            'hybrid':     config.HYBRID_CHECKPOINT,
-            'supervised': config.SUPERVISED_CHECKPOINT,
-            'ssl':        config.SSL_CHECKPOINT,
-        }.get(phase, config.HYBRID_CHECKPOINT)
-
-    model = _load_model(config, phase, model_path)
-    if model is None:
-        return None
-
+def evaluate_casiab(config, model, use_tta=True, n_tta=4):
+    """Evaluación CASIA-B con matriz angular completa."""
     all_conditions = ['nm-01','nm-02','nm-03','nm-04','nm-05','nm-06',
                       'bg-01','bg-02','cl-01','cl-02']
     all_angles     = ['000','018','036','054','072','090','108','126','144','162','180']
 
-    print("\n[+] Dataset de Prueba — 50 Sujetos Open-Set")
-    test_dataset = CASIAB_Supervised(
-        root_path=config.ROOT_PATH,
-        subject_range=config.SUPERVISED_CONFIG['test_range'],
-        conditions=all_conditions, angles=all_angles,
-        seq_len=config.SUPERVISED_SUBSET_FRAMES_PER_SEQ,
-        img_size=config.IMG_SIZE,
-        augment=False, return_info=True
-    )
+    print("\n[+] Dataset Test CASIA-B — 50 sujetos open-set")
+    test_ds = get_supervised_dataset(config, split='test', augment=False, return_info=True)
 
-    # Extracción
     if use_tta:
-        embeddings, labels, conditions, angles, subjects = extract_features_tta(
-            test_dataset, model, config.DEVICE, phase,
-            n_augments=n_tta, batch_size=config.BATCH_SIZE
-        )
+        emb, lbl, cond, ang, sub = extract_features_tta(
+            test_ds, model, config.DEVICE, n_augments=n_tta,
+            batch_size=config.BATCH_SIZE)
     else:
-        loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE,
+        loader = DataLoader(test_ds, batch_size=config.BATCH_SIZE,
                             shuffle=False, num_workers=2, pin_memory=True)
-        embeddings, labels, conditions, angles, subjects = extract_features_with_info(
-            loader, model, config.DEVICE, phase
-        )
+        emb, lbl, cond, ang, sub = extract_features_with_info(loader, model, config.DEVICE)
 
-    # Gallery: nm-01..nm-04
-    g_mask   = np.isin(conditions, ['nm-01','nm-02','nm-03','nm-04'])
-    g_embeds = embeddings[g_mask]
-    g_labels = labels[g_mask]
-    print(f"\n  Gallery: {len(g_embeds)} muestras (nm-01..04)")
+    g_mask   = np.isin(cond, ['nm-01','nm-02','nm-03','nm-04'])
+    g_emb, g_lbl = emb[g_mask], lbl[g_mask]
+    print(f"  Gallery: {len(g_emb)} | Modo: {'TTA×'+str(n_tta) if use_tta else 'Estándar'}")
 
     query_sets = {
-        'NM (Normal Walking)': ['nm-05','nm-06'],
-        'BG (Bag Occlusion)':  ['bg-01','bg-02'],
-        'CL (Coat Appearance)':['cl-01','cl-02'],
+        'NM': ['nm-05','nm-06'],
+        'BG': ['bg-01','bg-02'],
+        'CL': ['cl-01','cl-02'],
     }
-
+    overall = []
     print("\n" + "="*80)
-    overall_mAPs = []
 
-    for cond_name, cond_list in query_sets.items():
-        q_mask = np.isin(conditions, cond_list)
-        q_e    = embeddings[q_mask]
-        q_l    = labels[q_mask]
-        q_a    = angles[q_mask]
-        q_sub  = subjects[q_mask]
-        q_cond = conditions[q_mask]
+    for cname, clist in query_sets.items():
+        qm  = np.isin(cond, clist)
+        q_e = emb[qm]; q_l = lbl[qm]; q_a = ang[qm]
+        q_s = sub[qm]; q_c = cond[qm]
+        if len(q_e) == 0: continue
+        print(f"\n--- {cname} ({len(q_e)} Probes) ---")
 
-        if len(q_e) == 0:
-            continue
+        dm = (re_ranking(q_e.to(config.DEVICE), g_emb.to(config.DEVICE),
+                         k1=config.RERANK_K1, k2=config.RERANK_K2,
+                         lambda_val=config.RERANK_LAMBDA)
+              if config.USE_RERANKING
+              else torch.cdist(q_e, g_emb, p=2))
 
-        print(f"\n--- {cond_name} ({len(q_e)} Probes) ---")
+        r1,r5,r10,mAP,aps = compute_reid_metrics_block(dm, q_l, g_lbl)
+        overall.append(mAP)
+        print(f"> R1:{r1:.1f}% R5:{r5:.1f}% R10:{r10:.1f}% mAP:{mAP:.1f}%")
 
-        if config.USE_RERANKING:
-            dist_all = re_ranking(q_e.to(config.DEVICE), g_embeds.to(config.DEVICE),
-                                  k1=config.RERANK_K1, k2=config.RERANK_K2,
-                                  lambda_val=config.RERANK_LAMBDA)
-        else:
-            dist_all = torch.cdist(q_e, g_embeds, p=2)
+        parts = []
+        for ang_v in all_angles:
+            am = (q_a == ang_v)
+            if not np.any(am): continue
+            sd = (re_ranking(q_e[am].to(config.DEVICE), g_emb.to(config.DEVICE),
+                             k1=config.RERANK_K1, k2=config.RERANK_K2,
+                             lambda_val=config.RERANK_LAMBDA)
+                  if config.USE_RERANKING else torch.cdist(q_e[am], g_emb, p=2))
+            ar1,_,_,am_,_ = compute_reid_metrics_block(sd, q_l[am], g_lbl)
+            parts.append(f"{ang_v}°: R1 {ar1:04.1f}% / mAP {am_:04.1f}%")
+        print(" | ".join(parts))
 
-        r1, r5, r10, mAP, ap_scores = compute_reid_metrics_block(dist_all, q_l, g_labels)
-        overall_mAPs.append(mAP)
-        print(f"> Rank-1: {r1:.1f}% | Rank-5: {r5:.1f}% | Rank-10: {r10:.1f}% | mAP: {mAP:.1f}%")
+        print("\n  [Fallos — 5 peores]")
+        for idx in np.argsort(aps)[:5]:
+            print(f"   -> {q_s[idx]}, {q_c[idx]}, {q_a[idx]} | AP:{aps[idx]*100:.1f}%")
 
-        # Desglose angular
-        angle_parts = []
-        for ang in all_angles:
-            amask = (q_a == ang)
-            if not np.any(amask): continue
-            if config.USE_RERANKING:
-                sd = re_ranking(q_e[amask].to(config.DEVICE), g_embeds.to(config.DEVICE),
-                                k1=config.RERANK_K1, k2=config.RERANK_K2,
-                                lambda_val=config.RERANK_LAMBDA)
-            else:
-                sd = torch.cdist(q_e[amask], g_embeds, p=2)
-            ar1, _, _, amap, _ = compute_reid_metrics_block(sd, q_l[amask], g_labels)
-            angle_parts.append(f"{ang}°: R1 {ar1:04.1f}% / mAP {amap:04.1f}%")
-        print(" | ".join(angle_parts))
-
-        # Top-5 fallos
-        print("\n  [Fallos clínicos — 5 peores]")
-        for idx in np.argsort(ap_scores)[:5]:
-            print(f"   -> Sujeto {q_sub[idx]}, {q_cond[idx]}, "
-                  f"Ángulo {q_a[idx]} | AP: {ap_scores[idx]*100:.1f}%")
-
-    final_map = np.mean(overall_mAPs)
-    print("\n" + "="*60)
-    print(f" mAP GLOBAL: {final_map:.2f}%")
-    print(f" Baseline: 29.23% | Crecimiento: +{final_map-29.23:.2f}%")
-    print("="*60)
-    return final_map
+    final = np.mean(overall)
+    print(f"\n{'='*60}\n mAP GLOBAL CASIA-B: {final:.2f}% (+{final-29.23:.2f}% vs baseline)\n{'='*60}")
+    return final
 
 
 # =======================================================
-# 5. MAIN
+# 5. EVALUACIÓN PRINCIPAL — GAIT3D
+# =======================================================
+
+def evaluate_gait3d(config, model, use_tta=True, n_tta=4):
+    """
+    Evaluación Gait3D según protocolo oficial del JSON:
+      Gallery = todas las secuencias de TEST_SET excepto las del PROBE_SET
+      Query   = secuencias del PROBE_SET (1 por sujeto, 1000 total)
+    """
+    print("\n[+] Dataset Test Gait3D")
+    test_ds = Gait3D_Test(
+        root_path=config.GAIT3D_ROOT_PATH,
+        json_path=config.GAIT3D_JSON_PATH,
+        seq_len=config.GAIT3D_SEQ_LEN,
+        img_size=config.GAIT3D_IMG_SIZE,
+        return_info=True,
+    )
+
+    if use_tta:
+        emb, lbl, cond, ang, sub = extract_features_tta(
+            test_ds, model, config.DEVICE, n_augments=n_tta,
+            batch_size=config.BATCH_SIZE)
+    else:
+        loader = DataLoader(test_ds, batch_size=config.BATCH_SIZE,
+                            shuffle=False, num_workers=2, pin_memory=True)
+        emb, lbl, cond, ang, sub = extract_features_with_info(loader, model, config.DEVICE)
+
+    # Gait3D: condition = 'probe' | 'gallery' (asignado en Gait3D_Test)
+    g_mask = (cond == 'gallery')
+    q_mask = (cond == 'probe')
+    g_emb, g_lbl = emb[g_mask], lbl[g_mask]
+    q_emb, q_lbl = emb[q_mask], lbl[q_mask]
+    q_sub         = sub[q_mask]
+
+    print(f"  Gallery: {len(g_emb)} | Queries (probe): {len(q_emb)}")
+    print(f"  Modo: {'TTA×'+str(n_tta) if use_tta else 'Estándar'}")
+
+    if len(q_emb) == 0 or len(g_emb) == 0:
+        print("[!] Gallery o queries vacías — verificar rutas y JSON.")
+        return 0.0
+
+    dm = (re_ranking(q_emb.to(config.DEVICE), g_emb.to(config.DEVICE),
+                     k1=config.RERANK_K1, k2=config.RERANK_K2,
+                     lambda_val=config.RERANK_LAMBDA)
+          if config.USE_RERANKING
+          else torch.cdist(q_emb, g_emb, p=2))
+
+    r1, r5, r10, mAP, aps = compute_reid_metrics_block(dm, q_lbl, g_lbl)
+
+    print(f"\n{'='*60}")
+    print(f" RESULTADOS GAIT3D")
+    print(f" Rank-1: {r1:.2f}% | Rank-5: {r5:.2f}% | Rank-10: {r10:.2f}% | mAP: {mAP:.2f}%")
+
+    print("\n  [Fallos — 5 peores]")
+    for idx in np.argsort(aps)[:5]:
+        print(f"   -> Sujeto {q_sub[idx]} | AP: {aps[idx]*100:.1f}%")
+    print("="*60)
+    return mAP
+
+
+# =======================================================
+# 6. DISPATCHER — elige evaluación según dataset activo
+# =======================================================
+
+def test_reid_exhaustive(config, phase='hybrid', model_path=None,
+                         use_tta=True, n_tta=4):
+    """Punto de entrada unificado — enruta a CASIA-B o Gait3D."""
+    print(f"\n{'='*60}")
+    print(f" EVALUACIÓN [{config.ACTIVE_DATASET.upper()}] — {phase.upper()}")
+    print(f" Modo: {'TTA×'+str(n_tta) if use_tta else 'Estándar'} | "
+          f"RR: {'K1='+str(config.RERANK_K1) if config.USE_RERANKING else 'OFF'}")
+    print("="*60)
+
+    if model_path is None:
+        model_path = {'hybrid':     config.HYBRID_CHECKPOINT,
+                      'supervised': config.SUPERVISED_CHECKPOINT,
+                      'ssl':        config.SSL_CHECKPOINT}.get(phase)
+
+    model = _load_model(config, phase, model_path)
+    if model is None: return None
+
+    if config.ACTIVE_DATASET == 'casiab':
+        return evaluate_casiab(config, model, use_tta=use_tta, n_tta=n_tta)
+    elif config.ACTIVE_DATASET == 'gait3d':
+        return evaluate_gait3d(config, model, use_tta=use_tta, n_tta=n_tta)
+    else:
+        raise ValueError(f"Dataset no reconocido: {config.ACTIVE_DATASET}")
+
+
+# =======================================================
+# 7. MAIN
 # =======================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluación CASIA-B — configuración final: TTA×4 + Re-ranking K1=40"
+        description="Evaluación — CASIA-B y Gait3D"
     )
-    parser.add_argument('--phase', type=str, default='hybrid',
-                        choices=['ssl', 'supervised', 'hybrid'])
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help="Path a checkpoint específico (opcional).")
-    parser.add_argument('--no-tta', dest='use_tta', action='store_false',
-                        help="Desactivar TTA (más rápido, para debug).")
-    parser.add_argument('--tta-n', type=int, default=4,
-                        help="Número de cortes TTA (default: 4).")
+    parser.add_argument('--phase', default='hybrid',
+                        choices=['ssl','supervised','hybrid'])
+    parser.add_argument('--checkpoint', default=None)
+    parser.add_argument('--no-tta', dest='use_tta', action='store_false')
+    parser.add_argument('--tta-n', type=int, default=4)
     parser.set_defaults(use_tta=True)
     args = parser.parse_args()
 
@@ -337,10 +302,6 @@ if __name__ == "__main__":
     torch.backends.cudnn.allow_tf32       = True
     torch.set_float32_matmul_precision('high')
 
-    test_reid_exhaustive(
-        settings,
-        phase=args.phase,
-        model_path=args.checkpoint,
-        use_tta=args.use_tta,
-        n_tta=args.tta_n
-    )
+    test_reid_exhaustive(settings, phase=args.phase,
+                         model_path=args.checkpoint,
+                         use_tta=args.use_tta, n_tta=args.tta_n)

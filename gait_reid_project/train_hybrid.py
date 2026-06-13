@@ -9,7 +9,7 @@ import sys
 import numpy as np
 
 from configs import settings
-from src.data import CASIAB_Supervised
+from src.data import get_supervised_dataset
 from src.models import HybridGaitModel, SupervisedReIDModel, GaitBackbone
 from src.losses import TripletLoss, CircleLoss, ProxyAnchorLoss
 from src.samplers import RandomIdentitySampler
@@ -77,39 +77,14 @@ def _compute_centroids(model, dataset, num_classes, embed_dim, device, batch_siz
 
 
 def train_hybrid(config):
-    print("\n[+] INICIANDO ENTRENAMIENTO HÍBRIDO (VOLUMÉTRICO)\n")
+    print(f"\n[+] ENTRENAMIENTO HÍBRIDO [{config.ACTIVE_DATASET.upper()}]\n")
 
     # -------------------------------------------------------------------------
     # 1. Datasets
     # -------------------------------------------------------------------------
-    train_dataset = CASIAB_Supervised(
-        root_path=config.ROOT_PATH,
-        subject_range=config.SUPERVISED_CONFIG['train_range'],
-        conditions=config.SUPERVISED_CONFIG['conditions'],
-        angles=config.SUPERVISED_CONFIG['angles'],
-        seq_len=config.SUPERVISED_SUBSET_FRAMES_PER_SEQ,
-        img_size=config.IMG_SIZE,
-        augment=True
-    )
-    val_dataset = CASIAB_Supervised(
-        root_path=config.ROOT_PATH,
-        subject_range=config.SUPERVISED_CONFIG['val_range'],
-        conditions=config.SUPERVISED_CONFIG['conditions'],
-        angles=config.SUPERVISED_CONFIG['angles'],
-        seq_len=config.SUPERVISED_SUBSET_FRAMES_PER_SEQ,
-        img_size=config.IMG_SIZE,
-        augment=False,
-        return_info=True
-    )
-    centroid_dataset = CASIAB_Supervised(
-        root_path=config.ROOT_PATH,
-        subject_range=config.SUPERVISED_CONFIG['train_range'],
-        conditions=config.SUPERVISED_CONFIG['conditions'],
-        angles=config.SUPERVISED_CONFIG['angles'],
-        seq_len=config.SUPERVISED_SUBSET_FRAMES_PER_SEQ,
-        img_size=config.IMG_SIZE,
-        augment=False
-    )
+    train_dataset = get_supervised_dataset(config, split='train', augment=True)
+    val_dataset = get_supervised_dataset(config, split='val', augment=False, return_info=True)
+    centroid_dataset = get_supervised_dataset(config, split='train', augment=False)
 
     num_classes = train_dataset.get_num_classes()
     embed_dim   = 1024
@@ -127,7 +102,7 @@ def train_hybrid(config):
     # -------------------------------------------------------------------------
     # 2. Cargar modelo desde Fase 2
     # -------------------------------------------------------------------------
-    dummy_backbone   = GaitBackbone()
+    dummy_backbone   = GaitBackbone(hpp_parts=config.ACTIVE_HPP_PARTS)
     supervised_model = SupervisedReIDModel(backbone=dummy_backbone,
                                            num_classes=num_classes)
 
@@ -237,16 +212,6 @@ def train_hybrid(config):
 
     optimizer = optim.Adam(param_groups, weight_decay=1e-4)
 
-    # CosineAnnealingLR: LR decae suavemente de lr_inicial → eta_min en T_max épocas.
-    # Evita las oscilaciones de L_PAL en épocas tardías (observadas en runs anteriores)
-    # y permite micro-ajustes finos del espacio métrico en las últimas épocas.
-    # eta_min=1e-6 garantiza que el modelo no se detenga completamente al final.
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=config.HYBRID_EPOCHS,
-        eta_min=1e-6
-    )
-
     # -------------------------------------------------------------------------
     # 5. Ciclo de entrenamiento con AMP
     # -------------------------------------------------------------------------
@@ -300,20 +265,10 @@ def train_hybrid(config):
         avg_hard   = (hard_frac_sum  / steps) * 100
         epoch_time = time.time() - start_time
 
-        scheduler.step()  # CosineAnnealing: decrementar LR al final de cada época
-
         loss_label = "L_PAL" if use_pal else ("L_Circle" if config.USE_CIRCLE_LOSS else "L_Trip")
-        current_lr = scheduler.get_last_lr()[0]
-        # Con PAL, Hard% siempre es 0 (PAL no usa triplets).
-        # Se muestra L_CE/L_PAL ratio como indicador de balance entre pérdidas.
-        if use_pal:
-            balance = avg_ce / (avg_metric + 1e-8)
-            extra = f"CE/PAL: {balance:.3f}"
-        else:
-            extra = f"Hard%: {avg_hard:.1f}"
         print(f"Epoch {epoch:2d}/{config.HYBRID_EPOCHS} | "
               f"L_CE: {avg_ce:.3f} | {loss_label}: {avg_metric:.3f} | "
-              f"{extra} | LR: {current_lr:.2e} | Time: {epoch_time:.1f}s")
+              f"Hard%: {avg_hard:.1f} | Time: {epoch_time:.1f}s")
 
         # -----------------------------------------------------------------
         # Mini-Val cada 5 épocas
@@ -336,8 +291,26 @@ def train_hybrid(config):
                 all_labels = np.array(all_labels)
                 all_conds  = np.array(all_conds)
 
-                g_mask = np.isin(all_conds, ['nm-01', 'nm-02', 'nm-03', 'nm-04'])
-                q_mask = ~g_mask
+                # -------------------------------------------------------
+                # Split Gallery/Query del Mini-Val según el dataset activo
+                # -------------------------------------------------------
+                # CASIA-B: gallery = nm-01..04, query = el resto (bg, cl, nm-05/06)
+                # Gait3D:  no tiene condiciones fijas — se hace un split aleatorio
+                #          por sujeto: primera mitad de secuencias = gallery,
+                #          segunda mitad = query. Así siempre habrá ambas partes.
+                if config.ACTIVE_DATASET == 'casiab':
+                    g_mask = np.isin(all_conds, ['nm-01', 'nm-02', 'nm-03', 'nm-04'])
+                    q_mask = ~g_mask
+                else:
+                    # Para Gait3D: split 50/50 por índice dentro de cada sujeto
+                    unique_labels = np.unique(all_labels)
+                    g_mask = np.zeros(len(all_labels), dtype=bool)
+                    for uid in unique_labels:
+                        idxs = np.where(all_labels == uid)[0]
+                        mid  = max(1, len(idxs) // 2)
+                        g_mask[idxs[:mid]] = True
+                    q_mask = ~g_mask
+
                 g_e, g_l = all_embeds[g_mask], all_labels[g_mask]
                 q_e, q_l = all_embeds[q_mask], all_labels[q_mask]
 
