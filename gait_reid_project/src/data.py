@@ -486,15 +486,7 @@ class Gait3D_Test(Dataset):
         donde is_probe_str = 'probe' si la secuencia está en PROBE_SET, 'gallery' si no.
     """
     def __init__(self, root_path, json_path,
-                 seq_len=24, img_size=(64, 44), return_info=False,
-                 max_subjects=None):
-        """
-        Args:
-            max_subjects: Si se especifica, limita el número de sujetos de
-                          TEST_SET cargados. Útil para un Mini-Val rápido
-                          durante el entrenamiento híbrido (identidades
-                          nunca vistas en TRAIN_SET).
-        """
+                 seq_len=24, img_size=(64, 44), return_info=False):
 
         self.root        = Path(root_path)
         self.seq_len     = seq_len
@@ -508,8 +500,6 @@ class Gait3D_Test(Dataset):
             split_data = json.load(f)
 
         test_subjects = sorted(split_data['TEST_SET'])
-        if max_subjects is not None:
-            test_subjects = test_subjects[:max_subjects]
 
         # Construir set de claves probe para lookup O(1)
         # Formato probe: "0002-camid33_videoid2-seq0"
@@ -663,21 +653,18 @@ def get_supervised_dataset(config, split='train', augment=False, return_info=Fal
                 return_info=return_info,
             )
         elif split == 'val':
-            # Mini-Val real: subconjunto de TEST_SET (identidades NUNCA
-            # vistas durante el entrenamiento, a diferencia de antes que
-            # usaba los primeros 20 sujetos de TRAIN_SET y por eso
-            # quedaba saturado en ~100%).
-            #
-            # train_hybrid.py hace un split gallery/query 50/50 por
-            # 'label' sobre lo que devuelva este dataset, así que no
-            # requiere cambios — solo cambian las identidades subyacentes.
-            return Gait3D_Test(
+            # Gait3D no tiene val_range oficial.
+            # Para Mini-Val usamos los primeros 20 sujetos de TRAIN_SET —
+            # suficiente para monitorear convergencia sin costo computacional alto.
+            return Gait3D_Supervised(
                 root_path=config.GAIT3D_ROOT_PATH,
                 json_path=config.GAIT3D_JSON_PATH,
+                split='train',
                 seq_len=config.GAIT3D_SEQ_LEN,
                 img_size=config.GAIT3D_IMG_SIZE,
+                augment=False,
                 return_info=return_info,
-                max_subjects=getattr(config, 'GAIT3D_MINIVAL_SUBJECTS', 30),
+                max_subjects=20,   # limitar para que Mini-Val sea rápido
             )
         elif split == 'test':
             return Gait3D_Test(
