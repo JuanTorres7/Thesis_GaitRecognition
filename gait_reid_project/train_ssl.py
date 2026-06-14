@@ -16,13 +16,20 @@ def train_ssl(config):
 
     dataset = get_ssl_dataset(config)
 
+    # num_workers: en cluster Linux con varios CPUs asignados, subir agresivamente.
+    # Gait3D tiene 18940 secuencias (2.3x más que CASIA-B) — el cuello de botella
+    # es CoM alignment por frame en CPU. Más workers = más paralelismo de I/O+CPU.
+    # Verificar con `nproc` cuántos cores tiene el nodo asignado.
+    num_workers = getattr(config, 'DATALOADER_NUM_WORKERS', 2)
     loader = DataLoader(
         dataset, batch_size=config.BATCH_SIZE, shuffle=True,
-        num_workers=2, pin_memory=(config.DEVICE == "cuda"),
-        persistent_workers=True,
+        num_workers=num_workers, pin_memory=(config.DEVICE == "cuda"),
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=4 if num_workers > 0 else None,
     )
+    print(f"  DataLoader workers: {num_workers}")
 
-    model     = GaitBackbone(embed_dim=256, hpp_parts=config.ACTIVE_HPP_PARTS).to(config.DEVICE)
+    model     = GaitBackbone(embed_dim=256).to(config.DEVICE)
     criterion = NTXentLoss(temperature=config.SSL_TEMPERATURE)
     optimizer = torch.optim.AdamW(model.parameters(),
                                   lr=config.SSL_LEARNING_RATE, weight_decay=1e-4)
@@ -44,7 +51,7 @@ def train_ssl(config):
         epoch_loss = 0.0
         t0 = time.time()
 
-        for view1, view2 in loader:
+        for step, (view1, view2) in enumerate(loader):
             view1 = view1.to(config.DEVICE, non_blocking=True)
             view2 = view2.to(config.DEVICE, non_blocking=True)
             if scaler:
@@ -60,6 +67,16 @@ def train_ssl(config):
                 loss.backward()
                 optimizer.step()
             epoch_loss += loss.item()
+
+            # Progreso cada 20 steps — confirma que el loop avanza
+            # y permite estimar tiempo/epoch antes de que termine.
+            if (step + 1) % 20 == 0:
+                elapsed   = time.time() - t0
+                step_time = elapsed / (step + 1)
+                eta_epoch = step_time * len(loader)
+                print(f"    step {step+1:4d}/{len(loader)} | "
+                      f"{step_time:.2f}s/step | ETA época: {eta_epoch/60:.1f} min",
+                      flush=True)
 
         scheduler.step()
         avg = epoch_loss / len(loader)
