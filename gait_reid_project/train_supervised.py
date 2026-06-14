@@ -26,7 +26,7 @@ def train_supervised(config, use_ssl=True):
     num_classes = train_dataset.get_num_classes()
     print(f"Clases en train: {num_classes}")
 
-    backbone = GaitBackbone(embed_dim=256, hpp_parts=config.ACTIVE_HPP_PARTS)
+    backbone = GaitBackbone(embed_dim=256)
 
     if use_ssl and os.path.exists(config.SSL_CHECKPOINT):
         ckpt = torch.load(config.SSL_CHECKPOINT, map_location=config.DEVICE,
