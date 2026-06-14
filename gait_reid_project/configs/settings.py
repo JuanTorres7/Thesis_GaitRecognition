@@ -7,18 +7,22 @@ import os
 # =============================================================================
 # Cambia este valor para cambiar de dataset sin tocar nada más.
 # Opciones: 'casiab' | 'gait3d'
-ACTIVE_DATASET = 'gait3d'
+ACTIVE_DATASET = 'casiab'
 
 # --- Configuración General ---
 DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE  = 32
 NUM_INSTANCES = 4
 
+# Workers del DataLoader. En el cluster (Linux), verificar con `nproc` cuántos
+# cores tiene el nodo asignado y usar num_workers ~= nproc - 1 (deja 1 core libre
+# para el proceso principal). En Windows/laptop mantener en 2.
+DATALOADER_NUM_WORKERS = 8
+
 # =============================================================================
 # CONFIGURACIÓN CASIA-B
 # =============================================================================
-# CASIAB_ROOT_PATH   = "C:\\Users\\JuanTF\\Desktop\\Gait_Recognition\\archive\\output"
-CASIAB_ROOT_PATH = "/home/juan.torres/CASIA_B/output"
+CASIAB_ROOT_PATH   = "C:\\Users\\JuanTF\\Desktop\\Gait_Recognition\\archive\\output"
 CASIAB_IMG_SIZE    = (64, 64)
 CASIAB_SEQ_LEN     = 24
 CASIAB_SSL_SUBJECTS = 74
@@ -36,15 +40,11 @@ CASIAB_CONFIG = {
     'test_range':  (74, 124),
 }
 
-# Franjas HPP (Horizontal Pyramid Pooling) — NO TOCAR, mantiene el
-# comportamiento ya validado en CASIA-B.
-CASIAB_HPP_PARTS = 2
-
 # =============================================================================
 # CONFIGURACIÓN GAIT3D
 # =============================================================================
-GAIT3D_ROOT_PATH  = "/home/juan.torres/Gait3D/2D_Silhouettes"
-GAIT3D_JSON_PATH  = "/home/juan.torres/Gait3D/Gait3D.json"
+GAIT3D_ROOT_PATH  = "C:\\Users\\JuanTF\\Desktop\\Gait_Recognition\\Gait3D\\2D_Silhouettes"
+GAIT3D_JSON_PATH  = "C:\\Users\\JuanTF\\Desktop\\Gait_Recognition\\Gait3D\\Gait3D.json"
 GAIT3D_IMG_SIZE   = (64, 44)   # Resolución nativa OU-MVLP compatible; Gait3D se redimensiona a esto
 GAIT3D_SEQ_LEN    = 24
 # Gait3D no tiene condiciones ni ángulos fijos — es outdoor con ángulo libre.
@@ -55,21 +55,6 @@ GAIT3D_CONFIG = {
     'img_size':   GAIT3D_IMG_SIZE,
     'seq_len':    GAIT3D_SEQ_LEN,
 }
-
-# Franjas HPP para Gait3D — antes igualadas a CASIA-B (2) por una constante
-# global compartida en models.py. Ahora es independiente: 4 franjas dan
-# el doble de resolución espacial en la representación de marcha, lo cual
-# es más importante en Gait3D (open-set, outdoor, alta variabilidad) que
-# en CASIA-B (controlado, pocas identidades en test).
-# Si cambias este valor, hay que re-entrenar SSL → Supervisado → Híbrido
-# para Gait3D (cambia la dimensión de hpp_project).
-GAIT3D_HPP_PARTS = 4
-
-# Número de sujetos de TEST_SET usados para el Mini-Val durante el
-# entrenamiento híbrido. Son identidades nunca vistas en TRAIN_SET,
-# a diferencia del Mini-Val anterior (que reutilizaba sujetos de TRAIN_SET
-# y por eso quedaba saturado en ~100%).
-GAIT3D_MINIVAL_SUBJECTS = 30
 
 # =============================================================================
 # PARÁMETROS ACTIVOS — se resuelven según ACTIVE_DATASET
@@ -101,12 +86,6 @@ ROOT_PATH = _active['root_path']
 IMG_SIZE  = _active['img_size']
 SUPERVISED_SUBSET_FRAMES_PER_SEQ = _active['seq_len']
 SUPERVISED_CONFIG = _active['config'] if ACTIVE_DATASET == 'casiab' else None
-
-# Franjas HPP del dataset activo — usar este valor al instanciar GaitBackbone
-# en train_ssl.py / train_supervised.py / train_hybrid.py:
-#   backbone = GaitBackbone(embed_dim=256, hpp_parts=settings.ACTIVE_HPP_PARTS)
-ACTIVE_HPP_PARTS = (CASIAB_HPP_PARTS if ACTIVE_DATASET == 'casiab'
-                    else GAIT3D_HPP_PARTS)
 
 # =============================================================================
 # CONFIGURACIÓN SSL
@@ -159,11 +138,7 @@ RERANK_K2       = 2
 RERANK_LAMBDA   = 0.05
 
 USE_PAL                  = True
-# PAL_ALPHA más bajo para Gait3D: con alpha=32 el espacio de embedding
-# queda muy "anclado" a las 3000 identidades de TRAIN_SET, lo que perjudica
-# la transferencia a las 1000 identidades nunca vistas de TEST_SET.
-# CASIA-B mantiene 32 (sin cambios).
-PAL_ALPHA = 32 if ACTIVE_DATASET == 'casiab' else 16
+PAL_ALPHA                = 32
 PAL_DELTA                = 0.1
 PAL_WEIGHT               = 0.5
 PAL_INIT_FROM_SUPERVISED = True
