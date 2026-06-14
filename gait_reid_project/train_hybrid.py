@@ -102,7 +102,7 @@ def train_hybrid(config):
     # -------------------------------------------------------------------------
     # 2. Cargar modelo desde Fase 2
     # -------------------------------------------------------------------------
-    dummy_backbone   = GaitBackbone(hpp_parts=config.ACTIVE_HPP_PARTS)
+    dummy_backbone   = GaitBackbone()
     supervised_model = SupervisedReIDModel(backbone=dummy_backbone,
                                            num_classes=num_classes)
 
